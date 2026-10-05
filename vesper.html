@@ -1,0 +1,498 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Molecular Builder v3.0 - Precision Physics</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #111827; /* Darker theme for better contrast with scientific colors */
+        }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+
+        #header {
+            position: absolute; top: 20px; left: 20px; z-index: 10;
+            background: rgba(30, 41, 59, 0.85); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            padding: 15px 20px; border-radius: 15px; border: 1px solid #334155;
+            pointer-events: none; color: #f8fafc; max-width: 320px;
+        }
+        h1 { margin: 0 0 5px 0; font-size: 1.2rem; color: #38bdf8; }
+        p { margin: 0; font-size: 0.8rem; color: #cbd5e1; line-height: 1.4; }
+
+        #ui-container { position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: center; z-index: 10; pointer-events: none; }
+        
+        #toolbar {
+            display: flex; align-items: center; gap: 8px; padding: 12px 20px;
+            background: rgba(30, 41, 59, 0.9); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+            border-radius: 20px; border: 1px solid #334155; max-width: 90%; overflow-x: auto; pointer-events: auto;
+            scrollbar-width: thin; scrollbar-color: #475569 transparent;
+        }
+        #toolbar::-webkit-scrollbar { height: 6px; }
+        #toolbar::-webkit-scrollbar-thumb { background-color: #475569; border-radius: 10px; }
+
+        .btn {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            min-width: 48px; height: 52px; border: 1px solid #475569; border-radius: 12px;
+            background: #1e293b; color: #f8fafc; font-weight: bold; font-size: 13px;
+            cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
+        }
+        .btn:hover { transform: translateY(-3px); background: #334155; border-color: #64748b; }
+        .btn:active { transform: translateY(1px); }
+        
+        .btn-color-dot {
+            width: 14px; height: 14px; border-radius: 50%; margin-bottom: 4px;
+            box-shadow: inset 0 -2px 4px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        #clear-btn { background: #991b1b; border-color: #ef4444; padding: 0 15px; min-width: auto; }
+        #clear-btn:hover { background: #b91c1c; }
+
+        #info-panel {
+            position: absolute; display: none; z-index: 20;
+            background: rgba(15, 23, 42, 0.95); color: white; border: 1px solid #38bdf8;
+            padding: 12px 16px; border-radius: 12px; font-size: 0.85rem; pointer-events: none; 
+            transform: translate(-50%, -120%); white-space: nowrap; transition: opacity 0.15s;
+        }
+        .info-title { font-weight: bold; font-size: 1rem; margin-bottom: 4px; color: #38bdf8; }
+        .info-stat { display: flex; justify-content: space-between; gap: 15px; margin-bottom: 2px; }
+
+        @media (max-width: 600px) {
+            #header { top: 10px; left: 10px; right: 10px; text-align: center; max-width: none; }
+            #ui-container { bottom: 10px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="header">
+        <h1>Molecular Builder V3</h1>
+        <p>Physical atomic scaling & VSEPR physics. Drag atom to tail to form rings. Drag onto existing bonds to upgrade (Double/Triple).</p>
+    </div>
+
+    <div id="info-panel">
+        <div class="info-title" id="info-name">Carbon</div>
+        <div class="info-stat"><span>Valence e-:</span> <span id="info-valence">4</span></div>
+        <div class="info-stat"><span>Bonds:</span> <span id="info-bonds">0/4</span></div>
+        <div class="info-stat"><span>Radius:</span> <span id="info-radius">76 pm</span></div>
+    </div>
+
+    <div id="canvas-container"></div>
+    <div id="ui-container"><div id="toolbar"><button id="clear-btn" class="btn">Clear</button></div></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/DragControls.js"></script>
+
+    <script>
+        // --- HIGH PRECISION CHEMICAL DATA ---
+        // Empirically scaled covalent radii (in pm). Scale factor: 1 unit = 60 pm
+        const SCALE_FACTOR = 0.0166; 
+        
+        const elementsData = [
+            { symbol: 'H',  name: 'Hydrogen',   color: 0xffffff, pm: 31,  valence: 1, maxBonds: 1 },
+            { symbol: 'He', name: 'Helium',     color: 0xd9ffff, pm: 28,  valence: 2, maxBonds: 0 },
+            { symbol: 'Li', name: 'Lithium',    color: 0xcc80ff, pm: 128, valence: 1, maxBonds: 1 },
+            { symbol: 'Be', name: 'Beryllium',  color: 0xc2ff00, pm: 96,  valence: 2, maxBonds: 2 },
+            { symbol: 'B',  name: 'Boron',      color: 0xffb5b5, pm: 84,  valence: 3, maxBonds: 3 },
+            { symbol: 'C',  name: 'Carbon',     color: 0x555555, pm: 76,  valence: 4, maxBonds: 4 },
+            { symbol: 'N',  name: 'Nitrogen',   color: 0x3050f8, pm: 71,  valence: 5, maxBonds: 4 },
+            { symbol: 'O',  name: 'Oxygen',     color: 0xff0d0d, pm: 66,  valence: 6, maxBonds: 3 }, // E.g., H3O+
+            { symbol: 'F',  name: 'Fluorine',   color: 0x90e050, pm: 57,  valence: 7, maxBonds: 1 },
+            { symbol: 'Ne', name: 'Neon',       color: 0xb3e3f5, pm: 58,  valence: 8, maxBonds: 0 },
+            { symbol: 'Na', name: 'Sodium',     color: 0xab5cf2, pm: 166, valence: 1, maxBonds: 1 },
+            { symbol: 'Mg', name: 'Magnesium',  color: 0x8aff00, pm: 141, valence: 2, maxBonds: 2 },
+            { symbol: 'Al', name: 'Aluminum',   color: 0xbfa6a6, pm: 121, valence: 3, maxBonds: 3 },
+            { symbol: 'Si', name: 'Silicon',    color: 0xf0c8a0, pm: 111, valence: 4, maxBonds: 4 },
+            { symbol: 'P',  name: 'Phosphorus', color: 0xff8000, pm: 107, valence: 5, maxBonds: 5 }, // Expanded octet
+            { symbol: 'S',  name: 'Sulfur',     color: 0xffff30, pm: 105, valence: 6, maxBonds: 6 }, // Expanded octet
+            { symbol: 'Cl', name: 'Chlorine',   color: 0x1ff01f, pm: 102, valence: 7, maxBonds: 1 },
+            { symbol: 'Ar', name: 'Argon',      color: 0x80d1e3, pm: 106, valence: 8, maxBonds: 0 },
+            { symbol: 'K',  name: 'Potassium',  color: 0x8f40d4, pm: 203, valence: 1, maxBonds: 1 },
+            { symbol: 'Ca', name: 'Calcium',    color: 0x3dff00, pm: 176, valence: 2, maxBonds: 2 }
+        ];
+
+        let scene, camera, renderer, orbitControls, dragControls;
+        const atoms = []; 
+        const bonds = []; 
+        
+        let draggedAtom = null;
+        let targetSnapAtom = null;
+        let previewBondLine = null;
+
+        init();
+        animate();
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x111827, 0.015);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 150);
+            camera.position.set(0, 5, 20);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // Studio Lighting for Scientific rendering
+            scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+            const mainLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            mainLight.position.set(10, 20, 10);
+            mainLight.castShadow = true;
+            scene.add(mainLight);
+            
+            const backLight = new THREE.DirectionalLight(0x38bdf8, 0.5);
+            backLight.position.set(-15, -10, -15);
+            scene.add(backLight);
+
+            // Controls
+            orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+            orbitControls.enableDamping = true;
+            orbitControls.dampingFactor = 0.05;
+
+            dragControls = new THREE.DragControls(atoms, camera, renderer.domElement);
+            setupDragLogic();
+            setupClickLogic();
+
+            // Preview Line
+            const lineMat = new THREE.LineDashedMaterial({ color: 0x38bdf8, dashSize: 0.3, gapSize: 0.2, linewidth: 2 });
+            const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+            previewBondLine = new THREE.Line(lineGeo, lineMat);
+            previewBondLine.visible = false;
+            scene.add(previewBondLine);
+
+            buildUI();
+            window.addEventListener('resize', onWindowResize);
+            document.getElementById('clear-btn').addEventListener('click', clearScene);
+        }
+
+        function buildUI() {
+            const toolbar = document.getElementById('toolbar');
+            elementsData.forEach(el => {
+                const btn = document.createElement('button');
+                btn.className = 'btn';
+                const dot = document.createElement('div');
+                dot.className = 'btn-color-dot';
+                dot.style.backgroundColor = '#' + el.color.toString(16).padStart(6, '0');
+                btn.appendChild(dot);
+                btn.appendChild(document.createTextNode(el.symbol));
+                btn.addEventListener('click', () => spawnAtom(el));
+                toolbar.appendChild(btn);
+            });
+        }
+
+        function spawnAtom(data) {
+            const radius = data.pm * SCALE_FACTOR;
+            const material = new THREE.MeshStandardMaterial({
+                color: data.color, metalness: 0.2, roughness: 0.3, emissive: 0x000000
+            });
+            const geometry = new THREE.SphereGeometry(radius, 32, 32);
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.castShadow = true; mesh.receiveShadow = true;
+
+            mesh.position.set((Math.random()-0.5)*2, (Math.random()-0.5)*2, (Math.random()-0.5)*2);
+
+            mesh.userData = {
+                symbol: data.symbol,
+                name: data.name,
+                valence: data.valence,
+                maxBonds: data.maxBonds,
+                radius: radius,
+                pm: data.pm
+            };
+
+            scene.add(mesh);
+            atoms.push(mesh);
+        }
+
+        // --- VALENCY & CHEMISTRY QUERIES ---
+
+        function getAtomTotalBonds(atom) {
+            return bonds.filter(b => b.atomA === atom || b.atomB === atom).reduce((sum, b) => sum + b.order, 0);
+        }
+
+        function getAtomLonePairs(atom) {
+            let usedElectrons = getAtomTotalBonds(atom);
+            return Math.max(0, Math.floor((atom.userData.valence - usedElectrons) / 2));
+        }
+
+        function getConnectedNeighbors(atom) {
+            let neighbors = [];
+            bonds.forEach(b => {
+                if(b.atomA === atom) neighbors.push(b.atomB);
+                if(b.atomB === atom) neighbors.push(b.atomA);
+            });
+            return neighbors;
+        }
+
+        function getBondBetween(a, b) {
+            return bonds.find(bond => (bond.atomA === a && bond.atomB === b) || (bond.atomA === b && bond.atomB === a));
+        }
+
+        // --- DRAG, SNAP, & CYCLIZATION ---
+
+        function setupDragLogic() {
+            dragControls.addEventListener('dragstart', function(event) {
+                orbitControls.enabled = false;
+                draggedAtom = event.object;
+                hideInfoPanel();
+            });
+
+            dragControls.addEventListener('drag', function(event) {
+                // By only dragging the target atom, the PBD engine dynamically rubber-bands 
+                // the rest of the molecule. This physically allows Cyclization!
+                
+                targetSnapAtom = null;
+                let minDist = Infinity;
+
+                atoms.forEach(a => a.material.emissive.setHex(0x000000));
+
+                for (let other of atoms) {
+                    if (other === draggedAtom) continue;
+
+                    let dist = draggedAtom.position.distanceTo(other.position);
+                    let threshold = draggedAtom.userData.radius + other.userData.radius + 2.0; // Snap range
+
+                    if (dist < threshold && dist < minDist) {
+                        minDist = dist;
+                        targetSnapAtom = other;
+                    }
+                }
+
+                if (targetSnapAtom) {
+                    let aBonds = getAtomTotalBonds(draggedAtom);
+                    let bBonds = getAtomTotalBonds(targetSnapAtom);
+                    let existingBond = getBondBetween(draggedAtom, targetSnapAtom);
+                    let order = existingBond ? existingBond.order : 0;
+
+                    if (aBonds < draggedAtom.userData.maxBonds && bBonds < targetSnapAtom.userData.maxBonds && order < 3) {
+                        // Valid Form/Upgrade
+                        previewBondLine.visible = true;
+                        previewBondLine.geometry.setFromPoints([draggedAtom.position, targetSnapAtom.position]);
+                        previewBondLine.computeLineDistances();
+                        targetSnapAtom.material.emissive.setHex(0x004400); // Green glow
+                    } else {
+                        // Impossible chemistry
+                        previewBondLine.visible = false;
+                        targetSnapAtom.material.emissive.setHex(0x550000); // Red glow
+                        targetSnapAtom = null; 
+                    }
+                } else {
+                    previewBondLine.visible = false;
+                }
+            });
+
+            dragControls.addEventListener('dragend', function(event) {
+                orbitControls.enabled = true;
+                atoms.forEach(a => a.material.emissive.setHex(0x000000));
+                previewBondLine.visible = false;
+
+                if (targetSnapAtom) {
+                    let existingBond = getBondBetween(draggedAtom, targetSnapAtom);
+                    if (existingBond) {
+                        existingBond.order++;
+                        rebuildBondVisuals(existingBond);
+                    } else {
+                        createNewBond(draggedAtom, targetSnapAtom);
+                    }
+                }
+                draggedAtom = null;
+                targetSnapAtom = null;
+            });
+        }
+
+        function setupClickLogic() {
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+            renderer.domElement.addEventListener('pointerdown', (e) => {
+                if (draggedAtom) return;
+                mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(atoms);
+                if (intersects.length > 0) showInfoPanel(intersects[0].object, e.clientX, e.clientY);
+                else hideInfoPanel();
+            });
+        }
+
+        function showInfoPanel(atom, x, y) {
+            const panel = document.getElementById('info-panel');
+            document.getElementById('info-name').innerText = `${atom.userData.name} (${atom.userData.symbol})`;
+            document.getElementById('info-valence').innerText = atom.userData.valence;
+            document.getElementById('info-bonds').innerText = `${getAtomTotalBonds(atom)} / ${atom.userData.maxBonds}`;
+            document.getElementById('info-radius').innerText = `${atom.userData.pm} pm`;
+
+            panel.style.left = `${x}px`; panel.style.top = `${y - 40}px`;
+            panel.style.display = 'block'; setTimeout(() => panel.style.opacity = '1', 10);
+        }
+        function hideInfoPanel() {
+            const panel = document.getElementById('info-panel');
+            panel.style.opacity = '0'; setTimeout(() => { if(panel.style.opacity === '0') panel.style.display = 'none'; }, 150);
+        }
+
+        // --- BOND RENDERING ---
+
+        function createNewBond(atomA, atomB) {
+            let bond = { atomA, atomB, order: 1, visuals: [] };
+            bonds.push(bond);
+            rebuildBondVisuals(bond);
+        }
+
+        function rebuildBondVisuals(bond) {
+            bond.visuals.forEach(mesh => { scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); });
+            bond.visuals = [];
+
+            const material = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.4, metalness: 0.5 });
+            // Thinner cylinders for higher order bonds so they fit nicely
+            const cylRadius = bond.order === 1 ? 0.12 : 0.08;
+
+            for (let i = 0; i < bond.order; i++) {
+                const geo = new THREE.CylinderGeometry(cylRadius, cylRadius, 1, 8);
+                geo.translate(0, 0.5, 0);
+                const mesh = new THREE.Mesh(geo, material);
+                scene.add(mesh);
+                bond.visuals.push(mesh);
+            }
+        }
+
+        function updateBondVisualTransforms() {
+            bonds.forEach(bond => {
+                const a = bond.atomA.position;
+                const b = bond.atomB.position;
+                const dir = new THREE.Vector3().subVectors(b, a);
+                const dist = dir.length();
+                dir.normalize();
+
+                const up = new THREE.Vector3(0, 1, 0);
+                const quaternion = new THREE.Quaternion().setFromUnitVectors(up, dir);
+
+                let binormal = new THREE.Vector3().crossVectors(dir, up);
+                if (binormal.lengthSq() < 0.001) binormal = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(1,0,0));
+                binormal.normalize();
+
+                const gap = 0.25; 
+
+                bond.visuals.forEach((mesh, index) => {
+                    mesh.scale.set(1, dist, 1);
+                    mesh.quaternion.copy(quaternion);
+
+                    let offset = new THREE.Vector3();
+                    if (bond.order === 2) offset.copy(binormal).multiplyScalar(index === 0 ? gap/2 : -gap/2);
+                    else if (bond.order === 3) {
+                        if (index === 1) offset.copy(binormal).multiplyScalar(gap);
+                        if (index === 2) offset.copy(binormal).multiplyScalar(-gap);
+                    }
+                    mesh.position.copy(a).add(offset);
+                });
+            });
+        }
+
+        // --- VSEPR & RING PHYSICS (POSITION BASED DYNAMICS) ---
+
+        function applyPhysics() {
+            // High iterations ensure rigid-like stability even for rings
+            const ITERATIONS = 8;
+            const BOND_STIFFNESS = 0.6; 
+            const ANGLE_STIFFNESS = 0.15;
+            const REPULSION_STIFFNESS = 0.2;
+
+            for (let iter = 0; iter < ITERATIONS; iter++) {
+                
+                // 1. BOND LENGTHS (Shortens with higher bond orders)
+                bonds.forEach(bond => {
+                    let a = bond.atomA, b = bond.atomB;
+                    let delta = new THREE.Vector3().subVectors(b.position, a.position);
+                    let dist = delta.length();
+                    
+                    // Length rules: Double bonds are ~86% length, Triples ~78%
+                    let orderMultiplier = bond.order === 1 ? 1.0 : (bond.order === 2 ? 0.86 : 0.78);
+                    let targetDist = (a.userData.radius + b.userData.radius + 0.3) * orderMultiplier;
+                    
+                    if  (a !== draggedAtom) a.position.add(correction);
+                        if (b !== draggedAtom) b.position.sub(correction);
+                    }
+                });
+
+                // 2. VSEPR ANGLES (Handles Benzene implicitly by seeking local minimums)
+                atoms.forEach(central => {
+                    let neighbors = getConnectedNeighbors(central);
+                    if (neighbors.length < 2) return;
+
+                    let stericNumber = neighbors.length + getAtomLonePairs(central);
+                    let targetAngle = Math.PI; // 180
+                    if (stericNumber === 3) targetAngle = 2 * Math.PI / 3; // 120
+                    if (stericNumber >= 4) targetAngle = 109.5 * Math.PI / 180; // 109.5
+
+                    for (let i = 0; i < neighbors.length; i++) {
+                        for (let j = i + 1; j < neighbors.length; j++) {
+                            let n1 = neighbors[i], n2 = neighbors[j];
+                            let d1 = central.position.distanceTo(n1.position);
+                            let d2 = central.position.distanceTo(n2.position);
+                            
+                            // Law of cosines ideal distance
+                            let targetDist = Math.sqrt(d1*d1 + d2*d2 - 2*d1*d2*Math.cos(targetAngle));
+                            
+                            let delta = new THREE.Vector3().subVectors(n2.position, n1.position);
+                            let dist = delta.length();
+                            if (dist > 0.001) {
+                                let diff = dist - targetDist;
+                                let correction = delta.normalize().multiplyScalar(diff * ANGLE_STIFFNESS * 0.5);
+                                if (n1 !== draggedAtom) n1.position.add(correction);
+                                if (n2 !== draggedAtom) n2.position.sub(correction);
+                            }
+                        }
+                    }
+                });
+
+                // 3. VAN DER WAALS REPULSION (Prevents overlapping non-bonded atoms)
+                for (let i = 0; i < atoms.length; i++) {
+                    for (let j = i + 1; j < atoms.length; j++) {
+                        let a = atoms[i], b = atoms[j];
+                        if (getBondBetween(a, b)) continue;
+
+                        let delta = new THREE.Vector3().subVectors(b.position, a.position);
+                        let dist = delta.length();
+                        let minDist = a.userData.radius + b.userData.radius + 0.2; // Small buffer
+
+                        if (dist < minDist && dist > 0) {
+                            let diff = dist - minDist;
+                            let correction = delta.normalize().multiplyScalar(diff * REPULSION_STIFFNESS * 0.5);
+                            if (a !== draggedAtom) a.position.add(correction);
+                            if (b !== draggedAtom) b.position.sub(correction);
+                        }
+                    }
+                }
+            }
+        }
+
+        function clearScene() {
+            bonds.forEach(bond => { bond.visuals.forEach(v => { scene.remove(v); v.geometry.dispose(); v.material.dispose(); }); });
+            bonds.length = 0;
+            atoms.forEach(atom => { scene.remove(atom); atom.geometry.dispose(); atom.material.dispose(); });
+            atoms.length = 0;
+            hideInfoPanel();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            orbitControls.update();
+            applyPhysics(); 
+            updateBondVisualTransforms();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
+```
